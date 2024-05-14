@@ -1,0 +1,27 @@
+#!/bin/bash
+#SBATCH --time=1-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=pull
+
+#SBATCH --output=feat2.log
+#SBATCH --error=outpu.err
+
+#SBATCH --gres=gpu:2080ti:1
+
+#SBATCH --account=swanson-gpu-np
+#SBATCH --partition=swanson-gpu-np
+
+export WORK_DIR=PATH_TO_YOUR_FOLDER_ON_SCRATCH
+
+
+# Threads per MPI Process (Gromacs best performance is 1-6)
+
+
+python3 run_cont.py
+# RUN
+  
+#gmx_mpi mdrun -dlb yes  -s 1.tpr -nsteps 50000000 -deffnm 1 -noappend
+
+echo "... Job Finished at `date`"

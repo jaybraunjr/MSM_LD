@@ -1,0 +1,14 @@
+To do:
+
+
+in this folder:
+
+Adding .py files that call on featurization. This will be built for LDs
+
+Classes:
+	
+	- coordination number
+	- distances
+	- inter protein contacts
+	- distances within cuttoff (list appending)
+	

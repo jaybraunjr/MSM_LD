@@ -1,0 +1,68 @@
+import sys
+from openmm import app, LangevinIntegrator, MonteCarloBarostat
+from openmm import openmm
+import openmm.unit as u
+from openmm import DrudeLangevinIntegrator
+from openmm.unit import *
+import os
+from state import StateDataReporter
+from sys import stdout
+
+# Load the system state from the previous simulation
+with open('bulk2/continued_system.xml', 'r') as f:
+    system = openmm.XmlSerializer.deserialize(f.read())
+
+# Integrator setup
+integrator = DrudeLangevinIntegrator(
+    300.0 * u.kelvin,  # temperature
+    5.0 / u.picosecond,  # friction coeff
+    1.0 * u.kelvin,  # drude temperature
+    20.0 / u.picosecond,  # drude friction
+    0.001 * u.picosecond  # timestep
+)
+integrator.setMaxDrudeDistance(0.025)  # Drude Hardwall
+
+# Barostat setup for isotropic pressure
+barostat = MonteCarloBarostat(
+    1.0 * u.atmosphere,  # Pressure
+    300.0 * u.kelvin,    # Temperature
+    10                   # Frequency of Monte Carlo volume changes
+)
+system.addForce(barostat)
+
+# Load PSF file (for topology)
+psf = app.CharmmPsfFile('step2_drude_.psf')
+psf.setBox(8.0098228 * u.nanometers, 8.0098228 * u.nanometers, 16.196457 * u.nanometers)
+
+# Create a Simulation object
+simulation = app.Simulation(psf.topology, system, integrator)
+
+# Load the checkpoint file to continue from the previous state
+checkpoint_file = 'bulk2/checkpoint2.chk'  # Replace with your checkpoint file
+simulation.loadCheckpoint(checkpoint_file)
+
+# Set up reporters
+print('step1')
+simulation.reporters.append(app.DCDReporter('bulk2/test.dcd', 1000))
+simulation.reporters.append(app.CheckpointReporter('bulk2/test.chk', 1000))  # Save checkpoints
+
+# Custom reporter for pressure tensors
+reporter = StateDataReporter("bulk2/output_test.txt", reportInterval=1000, 
+                             step=True, temperature=True, 
+                             pressure=True, pxx=True, pyy=True, pzz=True)
+
+# Add the reporter to the simulation
+simulation.reporters.append(reporter)
+
+# Run the simulation
+simulation.step(1000000)
+
+# Save system and integrator states in XML format at the end
+with open('bulk2/continued_system.xml', 'w') as f:
+    f.write(openmm.XmlSerializer.serialize(simulation.system))
+with open('bulk2/continued_integrator.xml', 'w') as f:
+    f.write(openmm.XmlSerializer.serialize(simulation.integrator))
+
+# Save the final coordinates in PDB format
+positions = simulation.context.getState(getPositions=True).getPositions()
+app.PDBFile.writeFile(simulation.topology, positions, open('bulk2/continued_output.pdb', 'w'))

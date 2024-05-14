@@ -1,0 +1,8 @@
+This is tICA stuff for the MSM project.
+
+We are starting with:
+
+-running tICA on all the input features
+-conducting the VAMP2 score on these at given lagtime
+-plot the tICAs, and create free energy plots
+-determine the number of dimensions
