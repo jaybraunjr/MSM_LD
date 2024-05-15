@@ -11,92 +11,77 @@ import math
 from MDAnalysis.analysis import contacts
 import MDAnalysis as mda
 from tqdm import tqdm
+import os
 
+
+
+def save_intermediate_result(data, save_prefix, traj_filename, chunk_counter=None, suffix=''):
+    """
+    Save intermediate results to a .npy file.
+
+    Parameters:
+    - data: The data to be saved.
+    - save_prefix: The prefix for the saved file.
+    - traj_filename: The original trajectory filename.
+    - chunk_counter: The chunk counter to uniquely identify chunks (optional).
+    - suffix: Additional suffix to add to the filename (optional).
+    """
+    filename = os.path.basename(traj_filename).replace('.xtc', '')
+    if chunk_counter is not None:
+        filename += f'_chunk_{chunk_counter:03d}'
+    filename += suffix + '.npy'
+    np.save(f'{save_prefix}_{filename}', data)
 
 class dist:
-    """
-    This class provides methods for calculating distances and penetration depths
-    in molecular dynamics simulations.
-    """
-
-    def min_dist(self, mda_list):
-        # Dictionary to store results for each trajectory
+    def min_dist(self, mda_list, save_prefix):
         all_min_distances = {}
         for u in mda_list:
-            # Select protein residues
             protein_residues = u.select_atoms('protein').residues
             lipids = u.select_atoms('resname POPC DOPE SAPI')
             min_distances = np.zeros((len(protein_residues), len(u.trajectory)))
             for ts in tqdm(u.trajectory, desc=f"Processing {u.trajectory.filename}"):
-#             for ts in u.trajectory:
-                # For each protein residue
                 for i, residue in enumerate(protein_residues):
                     distances = np.min(mda.lib.distances.distance_array(residue.atoms.positions, lipids.positions, box=ts.dimensions))
                     min_distances[i, ts.frame] = distances
-            all_min_distances[u.trajectory.filename] = min_distances/10
+            min_distances = min_distances.T
+            save_intermediate_result(min_distances / 10, save_prefix, u.trajectory.filename, suffix='_min_dist')
+            all_min_distances[u.trajectory.filename] = min_distances / 10
 
-        trajectories_list = [value.T for value in all_min_distances.values()]
-
+        trajectories_list = [value for value in all_min_distances.values()]
         return trajectories_list
 
-    
- 
-    def compute_ca_dist(self, trajectory_paths, topology_path, c1, c2, chunk_size):        
+    def compute_ca_dist(self, trajectory_paths, topology_path, c1, c2, chunk_size):
         all_distances = []
         for trajectory_path in tqdm(trajectory_paths, desc="Processing trajectories"):
             traj_distances = []
             for chunk in tqdm(md.iterload(trajectory_path, top=topology_path, chunk=chunk_size), desc=f"Processing {trajectory_path}", leave=False):
                 atom_pairs = np.array([[i, j] for i in c1 for j in c2])
-
-                # Compute distances
                 distances = md.compute_distances(chunk, atom_pairs)
                 traj_distances.append(distances)
             traj_distances = np.concatenate(traj_distances, axis=0)
             all_distances.append(traj_distances)
-
         return all_distances
-    
-    def compute_penetration_depth(self, traj_files, top_file, protein_ca_indices, lipid_p_indices, chunk_size=20000):
-        """
-        Compute the penetration depth of protein CA atoms into a lipid bilayer.
-        
-        Parameters:
-        - traj_files: List of trajectory file paths.
-        - top_file: Topology file path.
-        - protein_ca_indices: Indices of CA atoms in the protein.
-        - lipid_p_indices: Indices of P atoms in the lipid.
-        - chunk_size: Number of frames per chunk to process.
-        
-        Returns:
-        - penetration_depths: List of penetration depths for each chunk.
-        """
-        penetration_depths = []
 
+    def compute_penetration_depth(self, traj_files, top_file, protein_ca_indices, lipid_p_indices, chunk_size=20000, save_prefix='penetration_depth'):
+        penetration_depths = []
         for traj_file in tqdm(traj_files, desc="Processing trajectory files"):
+            chunk_counter = 0
             for chunk in tqdm(md.iterload(traj_file, top=top_file, chunk=chunk_size), desc=f"Processing chunks in {traj_file}", leave=False):
                 lipid_p_positions = chunk.xyz[:, lipid_p_indices, :]
-
                 lipid_p_indices_top = lipid_p_indices[np.mean(lipid_p_positions[..., 2], axis=0) >= np.mean(chunk.unitcell_lengths[:, 2]) / 2]
                 lipid_p_indices_bottom = lipid_p_indices[np.mean(lipid_p_positions[..., 2], axis=0) < np.mean(chunk.unitcell_lengths[:, 2]) / 2]
-
                 lipid_p_com_top = md.compute_center_of_mass(chunk.atom_slice(lipid_p_indices_top))
                 lipid_p_com_bottom = md.compute_center_of_mass(chunk.atom_slice(lipid_p_indices_bottom))
-
                 protein_ca_positions = chunk.xyz[:, protein_ca_indices, :]
-
                 penetration_depth = np.empty((chunk.n_frames, len(protein_ca_indices)))
-
                 for frame in range(chunk.n_frames):
                     dist_top = np.linalg.norm(protein_ca_positions[frame] - lipid_p_com_top[frame], axis=-1)
                     dist_bottom = np.linalg.norm(protein_ca_positions[frame] - lipid_p_com_bottom[frame], axis=-1)
                     binding_to_top = dist_top < dist_bottom
-
-                    penetration_depth[frame] = np.where(binding_to_top, 
+                    penetration_depth[frame] = np.where(binding_to_top,
                                                         protein_ca_positions[frame, :, 2] - lipid_p_com_top[frame, 2],
                                                         protein_ca_positions[frame, :, 2] - lipid_p_com_bottom[frame, 2])
-
                     box_half_z = chunk.unitcell_lengths[frame, 2] / 2
-
                     for i, depth in enumerate(penetration_depth[frame]):
                         if depth > 0 and protein_ca_positions[frame, i, 2] < lipid_p_com_bottom[frame, 2] and not binding_to_top[i]:
                             penetration_depth[frame, i] = -depth
@@ -104,10 +89,11 @@ class dist:
                             penetration_depth[frame, i] = np.abs(depth)
                         if depth > 0 and protein_ca_positions[frame, i, 2] < box_half_z and not binding_to_top[i]:
                             penetration_depth[frame, i] = -depth
-
+                save_intermediate_result(penetration_depth, save_prefix, traj_file, chunk_counter)
+                chunk_counter += 1
                 penetration_depths.append(penetration_depth)
-
         return penetration_depths
+
 
 
 class cont:
@@ -135,31 +121,26 @@ class cont:
         k = j.astype('float32')
         return k
 
-    def calculate_contacts(self, mda_list, protein_selection, lipid_selection):
+    def calculate_contacts(self, mda_list, protein_selection, lipid_selection, save_prefix='contacts'):
         """Calculate number of contacts for each residue in a trajectory."""
-        # List to store results for each trajectory
-        ls = []
-        
+        all_contacts = []
         for u in  mda_list:
             protein_residues = u.select_atoms(protein_selection).residues
             lipids = u.select_atoms(lipid_selection)
             # Cutoff distance for contact (in Angstroms)
             cutoff = 3.5
-
             contacts = np.zeros((len(u.trajectory), len(protein_residues)))
-
-            # Loop over each frame
             for ts in tqdm(u.trajectory, desc=f"Processing {u.trajectory.filename}", leave=False):
                 # For each protein residue
                 for i, residue in enumerate(protein_residues):
-                    # Calculate distances between the residue and all lipids
                     distances = mda.lib.distances.distance_array(residue.atoms.positions, lipids.positions, box=ts.dimensions)
-                    # Count the number of lipids that have any atom within the cutoff distance to the residue
                     num_contacts = np.sum(np.any(distances < cutoff, axis=1))
                     contacts[ts.frame, i] = num_contacts
-            ls.append(contacts)
-        
-        return ls
+            
+            save_intermediate_result(contacts, save_prefix, u.trajectory.filename, suffix='_contacts')
+            all_contacts.append(contacts)
+ 
+        return all_contacts
 
 
     def run_coord(self, u_, ag1, ag2, nn=6, mm=12, d0=0, r0=2.5, density=False, b=0, e=None, skip=1):
